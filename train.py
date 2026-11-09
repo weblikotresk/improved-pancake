@@ -1,12 +1,32 @@
 """Дообучение rubert-tiny2 на классификацию токсичных комментариев."""
 
+import random
+
 import hydra
+import mlflow
+import numpy as np
 import pandas as pd
 import torch
 from omegaconf import DictConfig, OmegaConf
 from sklearn.metrics import accuracy_score, f1_score
 from torch.utils.data import DataLoader, TensorDataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+
+def set_seed(seed: int) -> None:
+    """Фиксирует seed во всех используемых генераторах случайных чисел."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def flatten_config(cfg: DictConfig) -> dict:
+    """Превращает вложенный конфиг в плоский словарь: {"training.lr": 5e-05, ...}."""
+    config_dict = OmegaConf.to_container(cfg, resolve=True)
+    return pd.json_normalize(config_dict, sep=".").to_dict(orient="records")[0]
 
 
 def make_loader(path: str, tokenizer, max_length: int, batch_size: int, shuffle: bool) -> DataLoader:
@@ -58,6 +78,7 @@ def evaluate(model, loader: DataLoader) -> dict[str, float]:
 @hydra.main(config_path="config", config_name="config", version_base="1.3")
 def main(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
+    set_seed(cfg.seed)
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.name)
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -75,19 +96,30 @@ def main(cfg: DictConfig) -> None:
         model.parameters(), lr=cfg.training.lr, weight_decay=cfg.training.weight_decay
     )
 
-    for epoch in range(1, cfg.training.epochs + 1):
-        train_loss = train_one_epoch(model, train_loader, optimizer)
-        metrics = evaluate(model, val_loader)
-        print(
-            f"epoch {epoch}: train_loss={train_loss:.4f} "
-            f"val_loss={metrics['val_loss']:.4f} "
-            f"val_accuracy={metrics['val_accuracy']:.4f} "
-            f"val_f1={metrics['val_f1']:.4f}"
-        )
+    mlflow.set_tracking_uri(cfg.mlflow.tracking_uri)
+    mlflow.set_experiment(cfg.mlflow.experiment_name)
+    run_name = f"lr={cfg.training.lr}_bs={cfg.training.batch_size}_ep={cfg.training.epochs}"
 
-    model.save_pretrained(cfg.data.checkpoint_dir)
-    tokenizer.save_pretrained(cfg.data.checkpoint_dir)
-    print(f"Чекпоинт сохранён в {cfg.data.checkpoint_dir}")
+    with mlflow.start_run(run_name=run_name):
+        # гиперпараметры берутся прямо из конфига Hydra
+        mlflow.log_params(flatten_config(cfg))
+
+        for epoch in range(1, cfg.training.epochs + 1):
+            train_loss = train_one_epoch(model, train_loader, optimizer)
+            metrics = evaluate(model, val_loader)
+            mlflow.log_metric("train_loss", train_loss, step=epoch)
+            mlflow.log_metrics(metrics, step=epoch)
+            print(
+                f"epoch {epoch}: train_loss={train_loss:.4f} "
+                f"val_loss={metrics['val_loss']:.4f} "
+                f"val_accuracy={metrics['val_accuracy']:.4f} "
+                f"val_f1={metrics['val_f1']:.4f}"
+            )
+
+        model.save_pretrained(cfg.data.checkpoint_dir)
+        tokenizer.save_pretrained(cfg.data.checkpoint_dir)
+        mlflow.log_artifacts(cfg.data.checkpoint_dir, artifact_path="checkpoint")
+        print(f"Чекпоинт сохранён в {cfg.data.checkpoint_dir} и залогирован в MLflow")
 
 
 if __name__ == "__main__":

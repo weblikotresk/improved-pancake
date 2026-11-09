@@ -5,3 +5,7 @@ defaults:
   - _self_
 
 seed: 42
+
+mlflow:
+  tracking_uri: sqlite:///mlflow.db
+  experiment_name: toxic-comments
