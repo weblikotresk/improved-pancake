@@ -1,0 +1,7 @@
+defaults:
+  - model: rubert_tiny2
+  - training: default
+  - data: default
+  - _self_
+
+seed: 42

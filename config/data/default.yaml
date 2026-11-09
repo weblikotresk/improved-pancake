@@ -1,0 +1,7 @@
+dataset_name: AlexSham/Toxic_Russian_Comments
+train_size: 5000
+val_size: 1000
+
+train_path: data/train_subset.csv
+val_path: data/val_subset.csv
+checkpoint_dir: models/checkpoint
