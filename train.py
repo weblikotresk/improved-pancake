@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 
+# унифицируем seed для воспроизводимости
 def set_seed(seed: int) -> None:
     """Фиксирует seed во всех используемых генераторах случайных чисел."""
     random.seed(seed)
@@ -22,7 +23,7 @@ def set_seed(seed: int) -> None:
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-
+# для логирования нужен плоский словарь..
 def flatten_config(cfg: DictConfig) -> dict:
     """Превращает вложенный конфиг в плоский словарь: {"training.lr": 5e-05, ...}."""
     config_dict = OmegaConf.to_container(cfg, resolve=True)
@@ -58,6 +59,7 @@ def train_one_epoch(model, loader: DataLoader, optimizer) -> float:
     return total_loss / len(loader)
 
 
+# здесь храним вычисление метрик
 @torch.no_grad()
 def evaluate(model, loader: DataLoader) -> dict[str, float]:
     model.eval()
@@ -96,19 +98,26 @@ def main(cfg: DictConfig) -> None:
         model.parameters(), lr=cfg.training.lr, weight_decay=cfg.training.weight_decay
     )
 
+    # конфиги для mlflow, пишем пути
     mlflow.set_tracking_uri(cfg.mlflow.tracking_uri)
     mlflow.set_experiment(cfg.mlflow.experiment_name)
     run_name = f"lr={cfg.training.lr}_bs={cfg.training.batch_size}_ep={cfg.training.epochs}"
 
+    # запускаем обучение сразу в mlflow
     with mlflow.start_run(run_name=run_name):
         # гиперпараметры берутся прямо из конфига Hydra
+        # логируем гиперпараметры в mlflow 
         mlflow.log_params(flatten_config(cfg))
 
+        # цикл по эпохам
         for epoch in range(1, cfg.training.epochs + 1):
             train_loss = train_one_epoch(model, train_loader, optimizer)
             metrics = evaluate(model, val_loader)
+
+            # логирование лосса, метрик, отсюда идут данные для красивых графиков в интерфейсе
             mlflow.log_metric("train_loss", train_loss, step=epoch)
             mlflow.log_metrics(metrics, step=epoch)
+
             print(
                 f"epoch {epoch}: train_loss={train_loss:.4f} "
                 f"val_loss={metrics['val_loss']:.4f} "
@@ -116,6 +125,7 @@ def main(cfg: DictConfig) -> None:
                 f"val_f1={metrics['val_f1']:.4f}"
             )
 
+        # логируем артефактом в mlflow финальную версию модели по нашему пути из конфига гидры
         model.save_pretrained(cfg.data.checkpoint_dir)
         tokenizer.save_pretrained(cfg.data.checkpoint_dir)
         mlflow.log_artifacts(cfg.data.checkpoint_dir, artifact_path="checkpoint")

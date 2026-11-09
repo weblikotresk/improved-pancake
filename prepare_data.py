@@ -1,5 +1,3 @@
-"""Выгружает небольшое подмножество датасета токсичности в CSV."""
-
 from pathlib import Path
 
 import hydra
